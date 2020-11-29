@@ -1,0 +1,12 @@
+# MATLAB
+*.asv
+*.autosave
+*.mex*
+slprj/
+*.slxc
+
+# Output written by workflow.m into the working folder
+src/*.xls
+
+# Python
+__pycache__/
