@@ -10,3 +10,5 @@ src/*.xls
 
 # Python
 __pycache__/
+.venv/
+.cache/

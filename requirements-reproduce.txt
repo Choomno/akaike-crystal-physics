@@ -1,0 +1,5 @@
+# Tested with Python 3.12.14; audit.json records the interpreter actually used.
+numpy==2.5.4
+scipy==1.18.1
+matplotlib==3.11.2
+xlrd==2.0.2

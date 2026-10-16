@@ -1,48 +1,124 @@
-# Independent re-computation of the 2020 MATLAB results (numpy/scipy), to check the code's math.
-import sys, os
+"""Audit every archived XLS run, then write the canonical figure data.
+
+Run from any working directory. A failed numerical check exits nonzero.
+"""
+import csv
+import hashlib
+import json
+import platform
+
+import matplotlib
 import numpy as np
-from scipy.optimize import least_squares
+import scipy
+import xlrd
 
-D = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
-sw = np.loadtxt(os.path.join(D, "swaminathan.txt"))          # rows: T, a, c
-ju = np.loadtxt(os.path.join(D, "julian.txt"))               # cols: T, a, c
-an = np.loadtxt(os.path.join(D, "anthracene.txt"))           # cols: P, a, b, c, beta
+from models import ROOT, aicc, datasets, debye, einstein, nonlinear, polynomial, weights
 
-def aicc(rss, n, k):
-    return n * np.log(rss / n) + 2 * k * n / (n - k - 1)
+OUT = ROOT / "docs" / "generated"
 
-def poly_aicc(x, y, deg):
-    X = np.vander(x, deg + 1, increasing=True)
-    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
-    rss = float(np.sum((y - X @ beta) ** 2))
-    return aicc(rss, len(y), deg + 2), beta
 
-def weights(a):
-    a = np.asarray(a); d = a - a.min(); w = np.exp(-d / 2); return w / w.sum()
+def sheet(path):
+    return xlrd.open_workbook(str(path)).sheet_by_index(0)
 
-for name, x, y, P in [("swaminathan a", sw[0], sw[1], 3), ("swaminathan c", sw[0], sw[2], 3),
-                      ("julian a", ju[:, 0], ju[:, 1], 3), ("julian c", ju[:, 0], ju[:, 2], 3),
-                      ("anthracene a", an[:, 0], an[:, 1], 10)]:
-    vals = [poly_aicc(x, y, d)[0] for d in range(1, P + 1)]
-    print(name, "AICc:", " ".join("%.4f" % v for v in vals))
 
-# Einstein / Debye on Swaminathan a
-T, a = sw[0], sw[1]
-ein = lambda p, T: p[0] + p[1] / (np.exp(p[2] / T) - 1)
-p2020 = np.array([5.56491, 0.0373932, 133.132])
-print("Einstein AICc from 2020 params:", "%.4f" % aicc(np.sum((ein(p2020, T) - a) ** 2), 7, 4))
-fit = least_squares(lambda p: ein(p, T) - a, [5.640, 9.4 * 280e-5, 280], method="lm")
-print("Einstein refit:", fit.x, "AICc %.4f" % aicc(2 * fit.cost, 7, 4))
+def close(actual, expected, tolerance, description):
+    if not np.isclose(actual, expected, rtol=0., atol=tolerance):
+        raise AssertionError(f"{description}: {actual} != {expected} (atol={tolerance})")
 
-c = [3953.632, -800.6087, 85.07724, -4.43282, 0.0946173, 682.0012, 143.155337, 15.121491]
-def deb(p, T):
-    z = p[2] / T
-    num = c[0] + c[1] * z + c[2] * z**2 + c[3] * z**3 + c[4] * z**4
-    den = c[0] + c[5] * z + c[6] * z**2 + c[7] * z**3 + z**4
-    return p[0] + p[1] * T * num / den
-d2020 = np.array([5.56596, 0.000357386, 280])
-print("Debye AICc from 2020 params:", "%.4f" % aicc(np.sum((deb(d2020, T) - a) ** 2), 7, 4))
-fit = least_squares(lambda p: deb(p, T) - a, [5.640, 9.4 * 280e-5, 280], method="lm")
-print("Debye refit:", fit.x, "AICc %.4f" % aicc(2 * fit.cost, 7, 4), fit.message)
 
-print("weights (p1,p2,p3,E,D) 2020 AICc:", weights([-73.4674, -74.8968, -34.2499, -76.65, -68.3644]).round(4))
+def ranked(records):
+    scores = [record["aicc"] for record in records]
+    ranks = np.argsort(np.argsort(scores)) + 1
+    for record, weight, rank in zip(records, weights(scores), ranks):
+        record.update(weight=float(weight), rank=int(rank))
+    return records
+
+
+def main():
+    result = {"environment": dict(python=platform.python_version(), numpy=np.__version__,
+                                 scipy=scipy.__version__, matplotlib=matplotlib.__version__,
+                                 xlrd=xlrd.__version__), "datasets": {}, "checks": []}
+    for name, x, y, maximum in datasets():
+        path = ROOT / "results" / "2020-04_polynomial" / name
+        table = sheet(path / "AIC.xls")
+        archived, corrected = [], []
+        for degree in range(1, maximum + 1):
+            parameters = sheet(path / f"degree_{degree}.xls")
+            beta = [parameters.cell_value(i, 0) for i in range(1, degree + 2)]
+            score = float(table.cell_value(degree, 0))
+            residual = y - np.polynomial.polynomial.polyval(x, beta)
+            close(aicc(residual @ residual, len(y), degree + 2), score, 1e-7,
+                  f"{name} degree {degree}: stored parameters reproduce stored AICc")
+            fit = polynomial(x, y, degree)
+            # Normal equations in the historical program become inaccurate at high degree.
+            tolerance = 1e-7 if degree <= 6 else 1e-5 if degree == 7 else 1e-2 if degree == 8 else None
+            if tolerance is not None:
+                close(fit["aicc"], score, tolerance, f"{name} degree {degree}: independent fit")
+            else:
+                # The scaled solution should minimize RSS at least as well as the historical fit.
+                if fit["aicc"] > score + 1e-7:
+                    raise AssertionError(f"{name} degree {degree}: scaled fit worsened RSS")
+            archived.append(dict(model=fit["model"], degree=degree, parameters=beta, aicc=score,
+                                 adjusted_r2=float(parameters.cell_value(1, 2))))
+            corrected.append(fit)
+            result["checks"].append(dict(dataset=name, degree=degree, archived_aicc=score,
+                                          refit_aicc=fit["aicc"], difference=fit["aicc"] - score,
+                                          reproduction_tolerance=tolerance,
+                                          status="verified" if tolerance else "historical numerical discrepancy"))
+        ranked(archived)
+        for degree, record in enumerate(archived, 1):
+            close(record["weight"], table.cell_value(degree, 1), 1e-10, f"{name}: archived weights")
+        result["datasets"][name] = dict(x=x.tolist(), y=y.tolist(), archived=archived,
+                                         corrected=ranked(corrected))
+
+    path = ROOT / "results" / "2020-11_modular_swaminathan"
+    table, parameters = sheet(path / "AIC.xls"), sheet(path / "nonlinear.xls")
+    data = result["datasets"]["swaminathan_a"]
+    x, y = np.array(data["x"]), np.array(data["y"])
+    archived, corrected = [], []
+    for degree in range(1, 4):
+        parameter_sheet = sheet(path / f"degree_{degree}.xls")
+        beta = [parameter_sheet.cell_value(i, 0) for i in range(1, degree + 2)]
+        residual = y - np.polynomial.polynomial.polyval(x, beta)
+        score = table.cell_value(degree, 1)
+        close(aicc(residual @ residual, len(y), degree + 2), score, 1e-7, "modular polynomial parameters")
+        fit = polynomial(x, y, degree)
+        close(fit["aicc"], score, 1e-7, "modular polynomial fit")
+        archived.append(dict(model=fit["model"], parameters=beta, aicc=score))
+        corrected.append(fit)
+    for column, (name, function) in enumerate((("Einstein", einstein), ("Debye", debye))):
+        beta = [parameters.cell_value(i, column) for i in range(1, 4)]
+        score = table.cell_value(4 + column, 1)
+        residual = y - function(beta, x)
+        close(aicc(residual @ residual, len(y), 4), score, 1e-7, f"archived {name} parameters")
+        archived.append(dict(model=name, parameters=beta, aicc=score))
+        fit = nonlinear(name, x, y)
+        if name == "Einstein":
+            close(fit["aicc"], score, 1e-4, "Einstein independent refit")
+        elif fit["aicc"] >= score - 1:
+            raise AssertionError("Debye refit did not resolve the documented early stop")
+        corrected.append(fit)
+    ranked(archived)
+    for i, row in enumerate(archived, 1):
+        close(row["weight"], table.cell_value(i, 2), 1e-10, "modular weights")
+    result["urea_models"] = dict(archived=archived, corrected=ranked(corrected))
+    # Fingerprint all immutable inputs; figures reject a stale canonical data file.
+    inputs = sorted((ROOT / "data").glob("*.txt")) + sorted((ROOT / "results").rglob("*.xls"))
+    sources = [ROOT / "docs/scripts" / name for name in ("verify.py", "models.py")]
+    result["inputs"] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs + sources}
+    OUT.mkdir(exist_ok=True)
+    (OUT / "audit.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
+    with (OUT / "polynomial_audit.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(result["checks"][0]), lineterminator="\n")
+        writer.writeheader(); writer.writerows(result["checks"])
+    with (OUT / "urea_rankings.csv").open("w", newline="") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(["model", "archived_aicc", "archived_weight", "archived_rank", "refit_aicc", "refit_weight", "refit_rank"])
+        for old, new in zip(result["urea_models"]["archived"], result["urea_models"]["corrected"]):
+            writer.writerow([old["model"], old["aicc"], old["weight"], old["rank"], new["aicc"], new["weight"], new["rank"]])
+    print(f"PASS: {len(result['checks'])} polynomial fits across 8 datasets; all {len(inputs)-3} XLS files read; modular fits checked.")
+    print("Canonical results: docs/generated/audit.json; comparison tables: docs/generated/*.csv")
+
+
+if __name__ == "__main__":
+    main()

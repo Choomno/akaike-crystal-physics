@@ -15,7 +15,7 @@ R² or adjusted R².
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/urea_a_dark.png">
-  <img alt="Urea lattice parameter a against temperature with linear, quadratic and Einstein fits. The Einstein model has the largest Akaike weight (0.61), then quadratic (0.25) and linear (0.12)." src="docs/img/urea_a_light.png">
+  <img alt="Urea lattice parameter a against temperature and model weights: the 2020 Einstein preference becomes a near tie between Debye and Einstein after refitting." src="docs/img/urea_a_light.png">
 </picture>
 
 ## Motivation
@@ -88,9 +88,13 @@ The output spreadsheets go to the current folder.
 
 I did not re-run the MATLAB code when archiving it in 2026, because I no longer had
 MATLAB. Instead, `docs/scripts/verify.py` re-computes the 2020 numbers independently
-with NumPy/SciPy. The polynomial AICc values match the 2020 output to four decimal
-places for every dataset up to degree 8. The Einstein fit also matches. For the
-exceptions, see [Known issues](#known-issues).
+with NumPy/SciPy. The audit reads all 65 archived `.xls` files and checks 52 polynomial fits across
+all eight data series, plus the modular polynomial and nonlinear fits. Stored
+coefficients reproduce stored AICc within an absolute tolerance of 10⁻⁷.
+Independent scaled polynomial fits agree within 10⁻⁷ through degree 6, 10⁻⁵ at
+degree 7, and 10⁻² at degree 8. Degrees 9–10 are reported as numerical discrepancies;
+the independent fits improve their residual sums of squares. The Einstein refit
+agrees within 10⁻⁴ AICc. See the [full numerical audit](docs/generated/polynomial_audit.csv).
 
 ## Results (2020 runs)
 
@@ -113,7 +117,7 @@ the fourth decimal place and gives no clear stopping point:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/anthracene_a_dark.png">
-  <img alt="Anthracene lattice parameter a: Akaike weight against polynomial degree peaks sharply at degree 6, while one minus adjusted R squared falls slowly and flattens between degrees 5 and 9." src="docs/img/anthracene_a_light.png">
+  <img alt="Anthracene lattice parameter a: archived and independently fitted Akaike weights and adjusted R squared for all ten degrees, showing numerical disagreement at high degree." src="docs/img/anthracene_a_light.png">
 </picture>
 
 **What we concluded at the time.** A cubic fit to the Hammond data for *a* can score
@@ -159,16 +163,58 @@ time. The 2020 code and output are left as they were.
   the lattice parameter directly.
 * **Debye fit stopped early.** In the 2020 run the optimizer stopped with the
   temperature parameter still at its initial guess (280 K). A 2026 SciPy refit
-  converges to about 185 K from any start, with AICc −76.77. That essentially ties
+  converges to about 185 K from four tested starts (80, 150, 280 and 500 K), with AICc −76.77. That essentially ties
   the Einstein model (−76.65), so the 2020 Debye weight (0.01) understates it. The
   likely cause is stopping tolerances combined with badly scaled parameters. The
   tighter tolerances are present but commented out in `nonlinear_least_squares.m`.
-* **Degree 9–10 anthracene fits.** These are over-parameterized for 18 points and
-  numerically unstable, so ignore them.
+* **High-degree anthracene fits.** The archived normal equations lose accuracy:
+  AICc differs by up to 0.007 at degree 8 and much more at degrees 9–10. Scaled
+  least squares resolves the numerical problem. Model suitability with only
+  18 observations remains a separate question; all ten candidates are retained
+  in the comparison figure and its weight normalization.
 * **Hard-coded starting values.** The nonlinear initial guess in `input_data.m` is
   tuned for urea *a*. Other datasets need their own.
 * **Placeholder column.** The `Std_Dev` column in `AIC.xls` is a placeholder
   (always 0).
+
+## Independent refit and reproduction
+
+The corrected Debye fit changes the five-model ranking for Swaminathan *a*.
+Debye and Einstein have nearly equal support; their small weight difference does
+not justify a strong preference. These weights use raw lattice parameters, the
+same seven observations, and the same five candidates in both columns.
+
+| Model | 2020 AICc | 2020 weight | Refit AICc | Refit weight |
+|---|---:|---:|---:|---:|
+| Polynomial 1 | -73.47 | 0.125 | -73.47 | 0.076 |
+| Polynomial 2 | -74.90 | 0.254 | -74.90 | 0.155 |
+| Polynomial 3 | -34.25 | <0.001 | -34.25 | <0.001 |
+| Einstein | -76.65 | 0.611 | -76.65 | 0.373 |
+| Debye | -68.36 | 0.010 | -76.77 | 0.396 |
+
+Values come from [the generated ranking table](docs/generated/urea_rankings.csv).
+The figure at the top compares both rankings and shows the independent fits.
+
+To reproduce the audit, tables, and light/dark PNG and vector PDF figures, use
+Python 3.12 or later from the repository root:
+
+```sh
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements-reproduce.txt
+MPLCONFIGDIR=.cache/matplotlib .venv/bin/python docs/scripts/verify.py
+MPLCONFIGDIR=.cache/matplotlib .venv/bin/python docs/scripts/plots.py
+```
+
+The tested dependency versions are pinned in `requirements-reproduce.txt`.
+`docs/generated/audit.json` records the actual Python/library versions and SHA-256
+hashes of all data and spreadsheets. Figures read that canonical result and reject
+changed inputs until verification is rerun. Polynomial fits use a scaled basis;
+nonlinear fits require positive amplitude and characteristic temperature, with
+four starting temperatures and explicit convergence tolerances. This is a numerical
+cross-check, not a rerun of MATLAB or a proof of global optimization.
+
+PDF figures: [urea](docs/img/urea_a_light.pdf),
+[anthracene](docs/img/anthracene_a_light.pdf).
 
 ## Status
 
