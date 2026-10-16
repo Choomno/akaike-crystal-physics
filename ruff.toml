@@ -1,0 +1,9 @@
+# The 2020 MATLAB sources, raw data and spreadsheets are preserved artifacts.
+target-version = "py312"
+include = ["docs/scripts/**/*.py", "tests/**/*.py"]
+extend-exclude = ["src", "legacy", "data", "results", "docs/generated"]
+force-exclude = true
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "C4", "RUF"]
+allowed-confusables = ["–", "−"]

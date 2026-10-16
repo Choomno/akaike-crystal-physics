@@ -205,6 +205,18 @@ MPLCONFIGDIR=.cache/matplotlib .venv/bin/python docs/scripts/verify.py
 MPLCONFIGDIR=.cache/matplotlib .venv/bin/python docs/scripts/plots.py
 ```
 
+To lint and test the maintained Python audit and plotting code:
+
+```sh
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .
+.venv/bin/python -m pytest -q
+```
+
+The Ruff scope is `docs/scripts/` and `tests/`. The preserved MATLAB sources in
+`src/` and `legacy/` are excluded from modern style checks.
+
 The tested dependency versions are pinned in `requirements-reproduce.txt`.
 `docs/generated/audit.json` records the actual Python/library versions and SHA-256
 hashes of all data and spreadsheets. Figures read that canonical result and reject

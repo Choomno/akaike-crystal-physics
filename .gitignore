@@ -12,3 +12,5 @@ src/*.xls
 __pycache__/
 .venv/
 .cache/
+.pytest_cache/
+.ruff_cache/
